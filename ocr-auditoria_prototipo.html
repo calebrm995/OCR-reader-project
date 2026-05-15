@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OCR — Auditoria de Multas</title>
+
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+
+  <style>
+  
+    :root {
+      --bg:           #0f1117;
+      --surface:      #1a1d27;
+      --surface-2:    #22263a;
+      --border:       #2e3450;
+      --accent:       #4f7cff;
+      --accent-glow:  rgba(79, 124, 255, 0.18);
+      --success:      #3ecf8e;
+      --success-glow: rgba(62, 207, 142, 0.15);
+      --warning:      #f0a500;
+      --text:         #e8eaf6;
+      --text-muted:   #7b82a8;
+      --radius:       12px;
+      --font-mono:    'Courier New', Courier, monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 32px 16px;
+      /* Textura sutil de ruído para profundidade visual */
+      background-image: radial-gradient(ellipse at 20% 0%, rgba(79,124,255,0.07) 0%, transparent 60%),
+                        radial-gradient(ellipse at 80% 100%, rgba(62,207,142,0.05) 0%, transparent 60%);
+    }
+
+    /* ---- CABEÇALHO ---- */
+    header {
+      text-align: center;
+      margin-bottom: 36px;
+      animation: fadeDown 0.5s ease both;
+    }
+
+    header .badge {
+      display: inline-block;
+      background: var(--accent-glow);
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      padding: 4px 12px;
+      border-radius: 99px;
+      margin-bottom: 14px;
+    }
+
+    header h1 {
+      font-size: 26px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      margin-bottom: 8px;
+    }
+
+    header p {
+      color: var(--text-muted);
+      font-size: 14px;
+      max-width: 460px;
+    }
+
+    /* ---- CARD PRINCIPAL ---- */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      width: 100%;
+      max-width: 620px;
+      padding: 28px;
+      animation: fadeUp 0.5s ease 0.1s both;
+    }
+
+    /* ---- ZONA DE PASTE ---- */
+    /*
+      Esta div funciona como receptora da imagem colada.
+      O atributo tabindex="0" a torna focável via teclado,
+      o que é necessário para capturar o evento de paste (Ctrl+V).
+    */
+    #drop-zone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      min-height: 180px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      outline: none;
+      position: relative;
+      overflow: hidden;
+    }
+
+    #drop-zone:hover,
+    #drop-zone:focus {
+      border-color: var(--accent);
+      background: var(--accent-glow);
+    }
+
+    /* Estado: imagem já carregada */
+    #drop-zone.has-image {
+      border-style: solid;
+      border-color: var(--accent);
+      background: transparent;
+    }
+
+    #drop-zone .icon {
+      font-size: 40px;
+      opacity: 0.4;
+    }
+
+    #drop-zone .hint {
+      color: var(--text-muted);
+      font-size: 14px;
+      text-align: center;
+      line-height: 1.5;
+    }
+
+    #drop-zone .hint strong {
+      color: var(--text);
+    }
+
+    /*
+      Preview da imagem colada.
+      Fica oculta até o usuário colar algo.
+    */
+    #preview {
+      display: none;
+      max-width: 100%;
+      max-height: 300px;
+      border-radius: 8px;
+      object-fit: contain;
+    }
+
+    /* ---- BOTÃO PROCESSAR ---- */
+    #btn-process {
+      margin-top: 20px;
+      width: 100%;
+      padding: 14px;
+      background: var(--accent);
+      color: #fff;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0.3px;
+      border: none;
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: opacity 0.2s, transform 0.1s;
+      display: none; /* Aparece somente após colar imagem */
+    }
+
+    #btn-process:hover  { opacity: 0.88; }
+    #btn-process:active { transform: scale(0.98); }
+    #btn-process:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+
+    /* ---- BARRA DE PROGRESSO ---- */
+    /*
+      O Tesseract processa a imagem em etapas (load, initialize,
+      recognize). A barra de progresso reflete o avanço real
+      reportado pela biblioteca via callback onProgress.
+    */
+    #progress-wrap {
+      display: none;
+      margin-top: 20px;
+    }
+
+    #progress-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+
+    #progress-bar-bg {
+      background: var(--surface-2);
+      border-radius: 99px;
+      height: 6px;
+      overflow: hidden;
+    }
+
+    #progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, var(--accent), var(--success));
+      border-radius: 99px;
+      width: 0%;
+      transition: width 0.3s ease;
+    }
+
+    /* ---- RESULTADO ---- */
+    #result-wrap {
+      display: none;
+      margin-top: 24px;
+      animation: fadeUp 0.3s ease both;
+    }
+
+    #result-wrap .result-label {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--success);
+      margin-bottom: 10px;
+    }
+
+    /*
+      Campo de texto onde o resultado do OCR aparece.
+      Monospace para facilitar leitura de números.
+      Seleção automática ao clicar facilita o Ctrl+C.
+    */
+    #result-text {
+      width: 100%;
+      background: var(--surface-2);
+      border: 1px solid var(--success);
+      border-radius: 8px;
+      color: var(--success);
+      font-family: var(--font-mono);
+      font-size: 22px;
+      font-weight: 700;
+      letter-spacing: 2px;
+      padding: 16px;
+      resize: none;
+      outline: none;
+      min-height: 60px;
+      text-align: center;
+      box-shadow: 0 0 0 4px var(--success-glow);
+    }
+
+    /* ---- BOTÃO COPIAR ---- */
+    #btn-copy {
+      margin-top: 12px;
+      width: 100%;
+      padding: 11px;
+      background: var(--success-glow);
+      color: var(--success);
+      font-size: 14px;
+      font-weight: 700;
+      border: 1px solid var(--success);
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    #btn-copy:hover { background: rgba(62, 207, 142, 0.28); }
+
+    #copy-feedback {
+      text-align: center;
+      font-size: 12px;
+      color: var(--success);
+      margin-top: 8px;
+      height: 16px;
+      transition: opacity 0.3s;
+    }
+
+    /* ---- MENSAGEM DE ERRO ---- */
+    #error-msg {
+      display: none;
+      margin-top: 16px;
+      background: rgba(240,100,80,0.1);
+      border: 1px solid rgba(240,100,80,0.4);
+      border-radius: 8px;
+      color: #f06450;
+      font-size: 13px;
+      padding: 12px 16px;
+    }
+
+    /* ---- INSTRUÇÕES ---- */
+    .instructions {
+      margin-top: 28px;
+      width: 100%;
+      max-width: 620px;
+      animation: fadeUp 0.5s ease 0.2s both;
+    }
+
+    .instructions h2 {
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      color: var(--text-muted);
+      margin-bottom: 14px;
+    }
+
+    .steps {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .step {
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 14px 16px;
+    }
+
+    .step .num {
+      background: var(--accent-glow);
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 50%;
+      width: 26px;
+      height: 26px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .step .text {
+      font-size: 14px;
+      line-height: 1.5;
+      color: var(--text);
+    }
+
+    .step .text kbd {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--accent);
+    }
+
+    /* ---- ANIMAÇÕES ---- */
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(14px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes fadeDown {
+      from { opacity: 0; transform: translateY(-10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    /* ---- BOTÃO NOVA IMAGEM ---- */
+    #btn-reset {
+      display: none;
+      margin-top: 10px;
+      width: 100%;
+      padding: 9px;
+      background: transparent;
+      color: var(--text-muted);
+      font-size: 13px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      transition: color 0.2s, border-color 0.2s;
+    }
+
+    #btn-reset:hover {
+      color: var(--text);
+      border-color: var(--text-muted);
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="badge">Ferramenta Interna</div>
+    <h1>OCR — Leitura de Imagem</h1>
+    <p>Cole um recorte de tela com o número da multa e a ferramenta extrai o texto automaticamente.</p>
+  </header>
+
+  <div class="card">
+
+    <!--
+      ZONA DE PASTE
+      ─────────────
+      O usuário recorta a tela com a Ferramenta de Recorte do Windows
+      (Win+Shift+S ou Snipping Tool) e cola aqui com Ctrl+V.
+
+      O evento "paste" é capturado pelo JavaScript abaixo.
+      O tabindex="0" é necessário para que a div receba foco
+      e, portanto, consiga capturar eventos de teclado.
+    -->
+    <div id="drop-zone" tabindex="0" title="Clique aqui e depois Ctrl+V para colar a imagem">
+      <span class="icon">📋</span>
+      <div class="hint">
+        <strong>Clique aqui</strong> e pressione <strong>Ctrl+V</strong><br>
+        para colar o recorte de tela
+      </div>
+      <!-- A imagem colada será exibida aqui como preview -->
+      <img id="preview" alt="Preview da imagem colada" />
+    </div>
+
+    <!-- Aparece após colar a imagem -->
+    <button id="btn-process">🔍 Extrair texto da imagem</button>
+    <button id="btn-reset">↩ Usar outra imagem</button>
+
+    <!--
+      BARRA DE PROGRESSO
+      ──────────────────
+      O Tesseract.js processa em etapas: carregamento do motor,
+      inicialização do modelo de idioma e reconhecimento.
+      O callback onProgress atualiza esta barra em tempo real.
+    -->
+    <div id="progress-wrap">
+      <div id="progress-label">Processando...</div>
+      <div id="progress-bar-bg">
+        <div id="progress-bar"></div>
+      </div>
+    </div>
+
+    <!-- Mensagem de erro caso algo dê errado -->
+    <div id="error-msg"></div>
+
+    <!--
+      RESULTADO DO OCR
+      ────────────────
+      O texto extraído aparece neste textarea.
+      Ele é editável para que o usuário possa corrigir
+      erros de leitura antes de copiar.
+    -->
+    <div id="result-wrap">
+      <div class="result-label">✓ Texto extraído</div>
+      <textarea id="result-text" rows="2" spellcheck="false"></textarea>
+      <button id="btn-copy">📋 Copiar para área de transferência</button>
+      <div id="copy-feedback"></div>
+    </div>
+
+  </div>
+
+  <!-- Instruções de uso -->
+  <div class="instructions">
+    <h2>Como usar</h2>
+    <div class="steps">
+      <div class="step">
+        <div class="num">1</div>
+        <div class="text">
+          No Synergia, na sessão de TDC's, pressione <kbd>Win+Shift+S</kbd> para abrir a Ferramenta de Recorte do Windows e selecione a área com o número do TDC.
+        </div>
+      </div>
+      <div class="step">
+        <div class="num">2</div>
+        <div class="text">
+          Volte para esta aba, clique na área cinza acima e pressione <kbd>Ctrl+V</kbd> para colar o recorte.
+        </div>
+      </div>
+      <div class="step">
+        <div class="num">3</div>
+        <div class="text">
+          Clique em <strong>Extrair texto da imagem</strong> e aguarde o processamento (alguns segundos).
+        </div>
+      </div>
+      <div class="step">
+        <div class="num">4</div>
+        <div class="text">
+          O número aparecerá em verde. Clique em <strong>Copiar</strong> e cole no sistema com <kbd>Ctrl+V</kbd>.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /*
+      ================================================================
+      LÓGICA PRINCIPAL — OCR VIA TESSERACT.JS
+      ================================================================
+      Fluxo geral:
+        1. Usuário cola imagem → capturamos via evento "paste"
+        2. Convertemos para URL de objeto (blob URL) para exibir preview
+        3. Ao clicar em "Extrair", passamos a imagem para o Tesseract
+        4. Tesseract retorna o texto reconhecido
+        5. Limpamos o texto e exibimos no campo de resultado
+      ================================================================
+    */
+
+    // ── Referências aos elementos do DOM ──
+    const dropZone    = document.getElementById('drop-zone');
+    const preview     = document.getElementById('preview');
+    const btnProcess  = document.getElementById('btn-process');
+    const btnReset    = document.getElementById('btn-reset');
+    const btnCopy     = document.getElementById('btn-copy');
+    const progressWrap = document.getElementById('progress-wrap');
+    const progressBar  = document.getElementById('progress-bar');
+    const progressLbl  = document.getElementById('progress-label');
+    const resultWrap  = document.getElementById('result-wrap');
+    const resultText  = document.getElementById('result-text');
+    const errorMsg    = document.getElementById('error-msg');
+    const copyFeedback = document.getElementById('copy-feedback');
+
+    // Guarda o blob da imagem colada para passar ao Tesseract
+    let imageBlob = null;
+
+       dropZone.addEventListener('paste', function(e) {
+      e.preventDefault(); // Evita comportamento padrão do browser
+
+      const items = e.clipboardData?.items;
+      if (!items) return;
+
+      // Percorre os itens colados procurando uma imagem
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          imageBlob = item.getAsFile(); // Converte para objeto File/Blob
+
+          // Cria uma URL temporária para exibir o preview sem upload
+          const url = URL.createObjectURL(imageBlob);
+          preview.src = url;
+          preview.style.display = 'block';
+
+          // Atualiza visual da zona de paste
+          dropZone.classList.add('has-image');
+          dropZone.querySelector('.icon').style.display = 'none';
+          dropZone.querySelector('.hint').style.display = 'none';
+
+          // Exibe o botão de processamento e o de resetar
+          btnProcess.style.display = 'block';
+          btnReset.style.display   = 'block';
+
+          // Esconde resultados anteriores se houver
+          resetResult();
+          break;
+        }
+      }
+    });
+
+ 
+    dropZone.addEventListener('click', function() {
+      dropZone.focus();
+    });
+
+   
+    btnProcess.addEventListener('click', async function() {
+      if (!imageBlob) return;
+
+      // UI: esconde resultado anterior, mostra progresso
+      resetResult();
+      progressWrap.style.display = 'block';
+      progressBar.style.width    = '0%';
+      progressLbl.textContent    = 'Iniciando motor OCR...';
+      btnProcess.disabled        = true;
+      errorMsg.style.display     = 'none';
+
+      try {
+        const result = await Tesseract.recognize(
+          imageBlob,
+
+          /*
+            Idioma: 'por' para português.
+            O Tesseract baixa o modelo de idioma na primeira vez (~4MB)
+            e armazena em cache no browser para usos posteriores.
+
+            Para campos puramente numéricos, 'eng' pode ser mais
+            preciso que 'por'. Testamos com 'por' por padrão.
+          */
+          'por',
+
+          {
+            /*
+              onProgress: callback chamado pelo Tesseract durante
+              cada etapa do reconhecimento.
+              Atualizamos a barra e o label em tempo real.
+            */
+            onProgress: ({ status, progress }) => {
+              const pct = Math.round((progress || 0) * 100);
+              progressBar.style.width = pct + '%';
+
+              // Traduz os status internos do Tesseract para PT-BR
+              const statusMap = {
+                'loading tesseract core':   'Carregando motor OCR...',
+                'initializing tesseract':   'Inicializando...',
+                'loading language traineddata': 'Baixando modelo de idioma...',
+                'initializing api':         'Preparando API...',
+                'recognizing text':         `Reconhecendo texto... ${pct}%`,
+              };
+              progressLbl.textContent = statusMap[status] || status;
+            },
+
+            /*
+              Parâmetros do Tesseract para melhorar precisão numérica:
+
+              tessedit_char_whitelist: lista branca de caracteres.
+              O Tesseract SÓ vai reconhecer os caracteres desta lista.
+              Para auditoria de multas (números), isso reduz muito
+              falsos positivos (ex: confundir 'O' com '0').
+
+              Remova ou ajuste se precisar capturar letras também.
+            */
+            tessedit_char_whitelist: '0123456789.-/',
+          }
+        );
+
+        /*
+          result.data.text contém o texto bruto reconhecido,
+          incluindo quebras de linha e espaços extras.
+
+          Limpamos o texto:
+          - .trim() remove espaços no início e fim
+          - replace(/\s+/g, ' ') colapsa múltiplos espaços em um
+          - replace(/\n/g, ' ') transforma quebras de linha em espaço
+
+          Para campos de número único, pode ser útil remover todos
+          os espaços: .replace(/\s/g, '')
+        */
+        let texto = result.data.text
+          .trim()
+          .replace(/\n+/g, ' ')
+          .replace(/\s+/g, ' ');
+
+        // Exibe o resultado
+        progressWrap.style.display  = 'none';
+        resultWrap.style.display    = 'block';
+        resultText.value            = texto;
+
+        // Seleciona o texto automaticamente para facilitar cópia
+        resultText.select();
+
+      } catch (err) {
+        /*
+          Captura erros de rede (falha ao baixar modelo de idioma)
+          ou erros internos do Tesseract.
+        */
+        progressWrap.style.display = 'none';
+        errorMsg.style.display     = 'block';
+        errorMsg.textContent       = `Erro ao processar a imagem: ${err.message}. Verifique a conexão com a internet (necessária para baixar o modelo de OCR na primeira vez).`;
+        console.error(err);
+      } finally {
+        btnProcess.disabled = false;
+      }
+    });
+
+    /*
+      ── COPIAR PARA ÁREA DE TRANSFERÊNCIA ───────────────────────────
+      Usamos a API moderna navigator.clipboard.writeText().
+      Exibimos feedback visual por 2 segundos.
+    */
+    btnCopy.addEventListener('click', async function() {
+      const texto = resultText.value.trim();
+      if (!texto) return;
+
+      try {
+        await navigator.clipboard.writeText(texto);
+        copyFeedback.textContent = '✓ Copiado!';
+        // Limpa o feedback após 2 segundos
+        setTimeout(() => { copyFeedback.textContent = ''; }, 2000);
+      } catch {
+        // Fallback para browsers mais antigos
+        resultText.select();
+        document.execCommand('copy');
+        copyFeedback.textContent = '✓ Copiado!';
+        setTimeout(() => { copyFeedback.textContent = ''; }, 2000);
+      }
+    });
+
+    /*
+      ── RESETAR PARA NOVA IMAGEM ─────────────────────────────────────
+      Limpa tudo e volta ao estado inicial.
+    */
+    btnReset.addEventListener('click', function() {
+      imageBlob               = null;
+      preview.src             = '';
+      preview.style.display   = 'none';
+      dropZone.classList.remove('has-image');
+      dropZone.querySelector('.icon').style.display = '';
+      dropZone.querySelector('.hint').style.display = '';
+      btnProcess.style.display = 'none';
+      btnReset.style.display   = 'none';
+      resetResult();
+      dropZone.focus();
+    });
+
+    /*
+      ── HELPER: resetar área de resultado ───────────────────────────
+    */
+    function resetResult() {
+      resultWrap.style.display   = 'none';
+      resultText.value           = '';
+      progressWrap.style.display = 'none';
+      copyFeedback.textContent   = '';
+    }
+
+    /*
+      ── FOCO INICIAL ─────────────────────────────────────────────────
+      A zona de paste já recebe foco ao carregar a página,
+      para que o usuário possa colar imediatamente sem clicar.
+    */
+    window.addEventListener('load', () => {
+      dropZone.focus();
+    });
+  </script>
+<footer>
+  <p>Desenvolvido por Caleb Monteiro - Todos os direitos reservados.</p>
+</footer>
+</body>
+</html>
